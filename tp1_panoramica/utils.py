@@ -1,6 +1,36 @@
 import numpy as np
-import cv2
 import matplotlib.pyplot as plt
+import cv2
+
+def find_corners(img, method='harris'):
+    useHarrisDetector = method == 'harris'
+    img = np.float32(img)
+    corners = cv2.goodFeaturesToTrack(
+        img,
+        maxCorners=1000,
+        qualityLevel=0.05,
+        minDistance=11,
+        useHarrisDetector=useHarrisDetector
+    )
+    return corners.reshape(-1, 2)
+
+def plot_corners(img, method='shi-tomasi', maxCorners=1000, qualityLevel=0.05, minDistance=11):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    corners = cv2.goodFeaturesToTrack(
+        gray,
+        maxCorners=maxCorners,
+        qualityLevel=qualityLevel,
+        minDistance=minDistance,
+        useHarrisDetector=(method == 'harris')
+    )
+
+    corners = corners.reshape(-1, 2)
+
+    plt.imshow(gray, cmap='gray')
+    plt.scatter(corners[:, 0], corners[:, 1], s=50, marker='+', color='red')
+    plt.title(f"Detección de esquinas ({method})")
+    plt.axis("off")
+    plt.show()
 
 def anms(keypoints, descriptors, N=500, strength_ratio=1.0, eps=1e-12):
     """
