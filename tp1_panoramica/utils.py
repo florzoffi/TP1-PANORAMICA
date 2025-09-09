@@ -92,8 +92,47 @@ def anms_from_coords(coords, responses, N=600, strength_ratio=1.1):
     keep = np.argsort(-R)[:min(N, n)]
     return keep, R[keep]
 
+def show_points_overlay(img_bgr, pts_xy, title):
+    vis = img_bgr.copy()
+    H, W = vis.shape[:2]
+    rad = max(2, int(0.004 * min(H, W)))      # radio relativo al tamaño de imagen
+    thick = max(1, int(rad // 2))
+    for x, y in pts_xy.astype(int):
+        cv2.circle(vis, (x, y), rad, (0, 255, 0), thickness=thick, lineType=cv2.LINE_AA)
+    plt.figure(figsize=(8,6))
+    plt.imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
+    plt.title(f"{title} (n={len(pts_xy)})"); plt.axis("off"); plt.show()
 
-def show_keypoints(img_bgr, kps, title):
-    vis = cv2.drawKeypoints(img_bgr, kps, None, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    plt.figure(figsize=(8,6)); plt.imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
-    plt.title(f"{title} (n={len(kps)})"); plt.axis("off"); plt.show()
+# 1) helper: de coords -> KeyPoints (sin re-detectar)
+def kps_from_coords(coords, size=7):
+    return [cv2.KeyPoint(float(x), float(y), size) for x, y in coords]
+
+# 2) describir SOLO los puntos ANMS
+def describe_orb_on_points(img_bgr, coords_anms, nfeatures=2000):
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    orb = cv2.ORB_create(nfeatures=nfeatures, fastThreshold=7)
+    kps = kps_from_coords(coords_anms)
+    kps2, desc = orb.compute(gray, kps)  # compute (no detect)
+    return kps2 if kps2 is not None else [], desc
+
+# 3) matching ORB (NORM_HAMMING) con Lowe + cross-check opcional
+def match_orb(desc1, desc2, ratio=0.75, crosscheck=True):
+    if desc1 is None or desc2 is None or len(desc1)==0 or len(desc2)==0:
+        return []
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+    m12 = bf.knnMatch(desc1, desc2, k=2)
+    good12 = [m for m,n in m12 if n is not None and m.distance < ratio*n.distance]
+    if not crosscheck:
+        return good12
+    m21 = bf.knnMatch(desc2, desc1, k=2)
+    good21 = [m for m,n in m21 if n is not None and m.distance < ratio*n.distance]
+    mutual = {(m.queryIdx, m.trainIdx) for m in good21}
+    return [m for m in good12 if (m.trainIdx, m.queryIdx) in mutual]
+
+# 4) dibujar matches
+def draw_matches(img1, kps1, img2, kps2, matches, max_lines=80, title="Matches"):
+    vis = cv2.drawMatches(img1, kps1, img2, kps2, matches[:max_lines], None,
+                          flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+    plt.figure(figsize=(12,6)); plt.imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
+    plt.title(f"{title} (shown={min(len(matches),max_lines)} / total={len(matches)})")
+    plt.axis("off"); plt.show()
