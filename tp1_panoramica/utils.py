@@ -103,36 +103,98 @@ def show_points_overlay(img_bgr, pts_xy, title):
     plt.imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
     plt.title(f"{title} (n={len(pts_xy)})"); plt.axis("off"); plt.show()
 
-# 1) helper: de coords -> KeyPoints (sin re-detectar)
+
+def to_gray_clahe(img):
+    if img.ndim == 3:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = img
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    return clahe.apply(gray)
+
 def kps_from_coords(coords, size=7):
     return [cv2.KeyPoint(float(x), float(y), size) for x, y in coords]
 
-# 2) describir SOLO los puntos ANMS
-def describe_orb_on_points(img_bgr, coords_anms, nfeatures=2000):
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    orb = cv2.ORB_create(nfeatures=nfeatures, fastThreshold=7)
-    kps = kps_from_coords(coords_anms)
-    kps2, desc = orb.compute(gray, kps)  # compute (no detect)
-    return kps2 if kps2 is not None else [], desc
+def build_orb():
+    # más robusto a leves escalas/rotaciones y poco contraste
+    return cv2.ORB_create(
+        nfeatures=5000,
+        scaleFactor=1.1,
+        nlevels=12,
+        edgeThreshold=15,
+        patchSize=31,
+        WTA_K=2,
+        fastThreshold=5
+    )
 
-# 3) matching ORB (NORM_HAMMING) con Lowe + cross-check opcional
-def match_orb(desc1, desc2, ratio=0.75, crosscheck=True):
+def describe_orb_on_points(img, coords_anms, orb=None):
+    if coords_anms is None or len(coords_anms) == 0:
+        return [], None
+    if orb is None:
+        orb = build_orb()
+    gray = to_gray_clahe(img)
+    kps = kps_from_coords(coords_anms)
+    kps2, desc = orb.compute(gray, kps)
+    return (kps2 if kps2 is not None else []), desc
+
+def match_orb(desc1, desc2, policy="ratio", ratio=0.85):
+    """
+    policy: "ratio" | "cross" | "both"
+    """
     if desc1 is None or desc2 is None or len(desc1)==0 or len(desc2)==0:
         return []
+    if policy == "cross":
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        return sorted(bf.match(desc1, desc2), key=lambda m: m.distance)
+
     bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+    # ratio adelante
     m12 = bf.knnMatch(desc1, desc2, k=2)
     good12 = [m for m,n in m12 if n is not None and m.distance < ratio*n.distance]
-    if not crosscheck:
+    if policy == "ratio":
         return good12
+
+    # both (ratio + cross-check)
     m21 = bf.knnMatch(desc2, desc1, k=2)
     good21 = [m for m,n in m21 if n is not None and m.distance < ratio*n.distance]
     mutual = {(m.queryIdx, m.trainIdx) for m in good21}
     return [m for m in good12 if (m.trainIdx, m.queryIdx) in mutual]
 
-# 4) dibujar matches
-def draw_matches(img1, kps1, img2, kps2, matches, max_lines=80, title="Matches"):
-    vis = cv2.drawMatches(img1, kps1, img2, kps2, matches[:max_lines], None,
-                          flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-    plt.figure(figsize=(12,6)); plt.imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
-    plt.title(f"{title} (shown={min(len(matches),max_lines)} / total={len(matches)})")
-    plt.axis("off"); plt.show()
+def draw_matches(img1, kps1, img2, kps2, matches,
+                       max_lines=200, thickness=4, radius=6,
+                       color=None, title="Matches (thick)"):
+    """
+    Dibuja matches con grosor configurable.
+    - thickness: grosor de las líneas
+    - radius: radio de los círculos en los puntos
+    - color: (B,G,R). Si None, colorea cada línea distinto.
+    """
+    h1, w1 = img1.shape[:2]
+    h2, w2 = img2.shape[:2]
+    H = max(h1, h2)
+    canvas = np.zeros((H, w1 + w2, 3), dtype=np.uint8)
+    canvas[:h1, :w1] = img1
+    canvas[:h2, w1:w1 + w2] = img2
+
+    rng = np.random.default_rng(123)
+
+    shown = min(len(matches), max_lines)
+    for i in range(shown):
+        m = matches[i]
+        x1, y1 = map(int, np.round(kps1[m.queryIdx].pt))
+        x2, y2 = map(int, np.round(kps2[m.trainIdx].pt))
+        p1 = (x1, y1)
+        p2 = (x2 + w1, y2)  # offset a la derecha
+
+        # color por defecto: aleatorio (pero reproducible)
+        c = tuple(int(v) for v in (rng.integers(64, 255, size=3) if color is None else color))
+        # círculos y línea gorditos
+        cv2.circle(canvas, p1, radius, c, thickness, lineType=cv2.LINE_AA)
+        cv2.circle(canvas, p2, radius, c, thickness, lineType=cv2.LINE_AA)
+        cv2.line(canvas, p1, p2, c, thickness, lineType=cv2.LINE_AA)
+
+    plt.figure(figsize=(12,6))
+    plt.imshow(cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB))
+    plt.title(f"{title} (shown={shown} / total={len(matches)})")
+    plt.axis("off")
+    plt.show()
